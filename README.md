@@ -1,0 +1,2 @@
+# reverseakamai
+Akamai solver
