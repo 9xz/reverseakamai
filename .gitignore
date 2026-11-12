@@ -8,3 +8,4 @@
 /*.har
 /*.HAR
 .DS_Store
+**/tests/

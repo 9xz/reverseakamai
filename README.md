@@ -94,6 +94,8 @@ Embedded-VM builds ship two TLV bytecode programs inside the script:
 
 ### Complete 37-Opcode Table (`crates/codec/src/vm.rs`)
 
+`try_disassemble` resolves opcode bytes per build from function entries, branch targets, string operands, and stack-operation patterns; the interpreter uses the resolved map directly. The opcode column below is the reference encoding, not a pinned lookup table. Unsupported new operations return an error instead of being guessed.
+
 Earlier public disassemblers desynced around offset ~520 because they treated `0x54` (`LEAVE_SCOPE`, 0 operand bytes) as a 9-byte `PUSHnum`. With exact operand widths, 100% of Blob 0 and Blob 1 disassemble and execute with zero unknown bytes:
 
 | Opcode | Mnemonic | Operands (Big-Endian) | Stack / Execution Semantics |

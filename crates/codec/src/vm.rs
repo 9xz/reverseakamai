@@ -110,8 +110,7 @@ pub enum Op {
     Unknown(u8),
 }
 
-/// Disassemble a TLV bytecode stream with exact operand widths.
-pub fn disassemble(bytes: &[u8]) -> Vec<Instruction> {
+fn disassemble_legacy(bytes: &[u8]) -> Vec<Instruction> {
     let mut out = Vec::new();
     let mut pc = 0usize;
     while pc < bytes.len() {
@@ -229,6 +228,627 @@ pub fn disassemble(bytes: &[u8]) -> Vec<Instruction> {
         out.push(Instruction { offset, op });
     }
     out
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Width {
+    Fixed(usize),
+    String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum OpKind {
+    Jmp,
+    JBool,
+    JTrue,
+    MakeFunc,
+    SetTry,
+    EnterScope,
+    LeaveScope,
+    Ret,
+    FnEntry,
+    PushUndefined,
+    PushStr,
+    GetVar,
+    SetVar,
+    PushU8,
+    PushU32,
+    PushF64,
+    PropGet,
+    Call,
+    NewArray,
+    PostInc,
+    Halt,
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
+    BitXor,
+    Shl,
+    Shr,
+    BitOr,
+    Ushr,
+    Neg,
+    BoolNot,
+    CmpLtLoop,
+    CmpEq,
+    CmpNeq,
+    CmpType,
+    InOp,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct RawInstruction {
+    offset: usize,
+    opcode: u8,
+    width: Width,
+}
+
+type Widths = [Option<Width>; 256];
+type Kinds = [Option<OpKind>; 256];
+
+fn resolution_error() -> CodecError {
+    CodecError::Format("could not resolve VM opcode map".to_owned())
+}
+
+fn seed_width(widths: &mut Widths, opcode: u8, width: Width) -> Result<()> {
+    if let Some(old) = widths[opcode as usize] {
+        if old != width {
+            return Err(CodecError::Format(format!(
+                "conflicting widths for opcode 0x{opcode:02x}: {old:?} vs {width:?}"
+            )));
+        }
+    }
+    widths[opcode as usize] = Some(width);
+    Ok(())
+}
+
+fn seed_kind(kinds: &mut Kinds, opcode: u8, kind: OpKind) -> Result<()> {
+    if let Some(old) = kinds[opcode as usize] {
+        if old != kind {
+            return Err(CodecError::Format(format!(
+                "conflicting kinds for opcode 0x{opcode:02x}: {old:?} vs {kind:?}"
+            )));
+        }
+    }
+    kinds[opcode as usize] = Some(kind);
+    Ok(())
+}
+
+fn string_at(bytes: &[u8], offset: usize) -> Option<(&[u8], usize)> {
+    let len = u16::from_be_bytes([*bytes.get(offset + 1)?, *bytes.get(offset + 2)?]) as usize;
+    if len > 64 || offset.checked_add(3 + len)? > bytes.len() {
+        return None;
+    }
+    let text = &bytes[offset + 3..offset + 3 + len];
+    (text.iter().all(|&b| b == b'\t' || (32..127).contains(&b))).then_some((text, offset + 3 + len))
+}
+
+fn raw_text<'a>(bytes: &'a [u8], raw: RawInstruction) -> Option<&'a [u8]> {
+    (raw.width == Width::String).then(|| string_at(bytes, raw.offset).map(|(text, _)| text))?
+}
+
+fn is_global(text: &[u8]) -> bool {
+    [
+        b"window".as_slice(),
+        b"document".as_slice(),
+        b"Math".as_slice(),
+        b"String".as_slice(),
+        b"parseInt".as_slice(),
+        b"Array".as_slice(),
+    ]
+    .iter()
+    .any(|name| text == *name)
+}
+
+fn is_property_anchor(text: &[u8]) -> bool {
+    [
+        b"length".as_slice(),
+        b"split".as_slice(),
+        b"join".as_slice(),
+        b"userAgent".as_slice(),
+        b"charCodeAt".as_slice(),
+        b"push".as_slice(),
+    ]
+    .iter()
+    .any(|name| text == *name)
+}
+
+fn infer_widths(bytes: &[u8]) -> Result<(Widths, Vec<RawInstruction>)> {
+    if bytes.len() < 12 {
+        return Err(resolution_error());
+    }
+    let first_target = u32::from_be_bytes(bytes[1..5].try_into().unwrap()) as usize;
+    if first_target + 12 >= bytes.len() || first_target < 7 {
+        return Err(resolution_error());
+    }
+    let name_len = u16::from_be_bytes([bytes[first_target + 8], bytes[first_target + 9]]) as usize;
+    let set_var = first_target + 10 + name_len;
+    if set_var + 2 > bytes.len() {
+        return Err(resolution_error());
+    }
+
+    let mut widths = [None; 256];
+    for (opcode, width) in [
+        (bytes[0], Width::Fixed(4)),
+        (bytes[5], Width::Fixed(0)),
+        (bytes[6], Width::Fixed(0)),
+        (bytes[first_target], Width::Fixed(6)),
+        (bytes[first_target - 1], Width::Fixed(0)),
+        (bytes[first_target - 2], Width::Fixed(0)),
+        (bytes[7], Width::String),
+        (bytes[first_target + 7], Width::String),
+        (bytes[set_var], Width::Fixed(1)),
+    ] {
+        seed_width(&mut widths, opcode, width)?;
+    }
+    if bytes[8] == 0 && bytes[9] == 0 {
+        seed_width(&mut widths, bytes[10], Width::Fixed(1))?;
+    }
+
+    // Array initializers are long alternating runs of the same u8 push opcode.
+    for pc in 0..bytes.len().saturating_sub(16) {
+        let opcode = bytes[pc];
+        if (2..16).step_by(2).all(|n| bytes[pc + n] == opcode) {
+            seed_width(&mut widths, opcode, Width::Fixed(1))?;
+            let mut end = pc;
+            while end + 1 < bytes.len() && bytes[end] == opcode {
+                end += 2;
+            }
+            if end == bytes.len() {
+                return Err(resolution_error());
+            }
+            seed_width(&mut widths, bytes[end], Width::Fixed(1))?;
+        }
+    }
+
+    // Global roots and method/property names expose the two string opcodes,
+    // PROP_GET, and CALL without depending on their byte values.
+    for pc in 0..bytes.len().saturating_sub(4) {
+        let Some((text, end)) = string_at(bytes, pc) else {
+            continue;
+        };
+        if end == bytes.len() {
+            continue;
+        }
+        if end < bytes.len()
+            && bytes[end] == bytes[set_var]
+            && bytes[pc] != bytes[7]
+            && !text.is_empty()
+            && text
+                .iter()
+                .all(|b| b.is_ascii_alphanumeric() || *b == b'_' || *b == b'$')
+        {
+            seed_width(&mut widths, bytes[pc], Width::String)?;
+        }
+        if is_global(text) {
+            seed_width(&mut widths, bytes[pc], Width::String)?;
+            if end + 4 <= bytes.len()
+                && bytes[end + 1] <= 1
+                && u16::from_be_bytes([bytes[end + 2], bytes[end + 3]]) <= 8
+            {
+                seed_width(&mut widths, bytes[end], Width::Fixed(3))?;
+            }
+        }
+        if is_property_anchor(text) {
+            seed_width(&mut widths, bytes[end], Width::Fixed(1))?;
+            if end + 2 < bytes.len() && bytes[end + 1] == 0 {
+                seed_width(&mut widths, bytes[end + 2], Width::Fixed(3))?;
+            }
+        }
+        if bytes[pc] == bytes[7]
+            && widths[bytes[end] as usize] == Some(Width::Fixed(1))
+            && end + 6 <= bytes.len()
+            && widths[bytes[end + 2] as usize].is_none_or(|w| w == Width::Fixed(3))
+            && bytes[end + 1] <= 1
+            && bytes[end + 3] <= 1
+            && u16::from_be_bytes([bytes[end + 4], bytes[end + 5]]) <= 8
+        {
+            seed_width(&mut widths, bytes[end], Width::Fixed(1))?;
+            seed_width(&mut widths, bytes[end + 2], Width::Fixed(3))?;
+        }
+        if pc + 5 <= bytes.len()
+            && u32::from_be_bytes(bytes[pc + 1..pc + 5].try_into().unwrap()) == 5381
+        {
+            seed_width(&mut widths, bytes[pc], Width::Fixed(4))?;
+        }
+    }
+
+    let mut raw = Vec::new();
+    let mut pc = 0;
+    while pc < bytes.len() {
+        let opcode = bytes[pc];
+        let width = match widths[opcode as usize] {
+            Some(width) => width,
+            None => {
+                let next_known =
+                    |n| pc + n < bytes.len() && widths[bytes[pc + n] as usize].is_some();
+                let branch_target = || {
+                    (pc + 6 <= bytes.len()).then(|| {
+                        u32::from_be_bytes(bytes[pc + 2..pc + 6].try_into().unwrap()) as usize
+                    })
+                };
+                let width = if pc + 1 < bytes.len() && opcode == bytes[pc + 1] {
+                    Width::Fixed(0)
+                } else if pc + 6 <= bytes.len()
+                    && bytes[pc + 1] <= 1
+                    && branch_target().is_some_and(|target| {
+                        target < bytes.len()
+                            && (target > pc
+                                || raw.iter().any(|r: &RawInstruction| r.offset == target))
+                    })
+                {
+                    Width::Fixed(5)
+                } else if pc + 9 <= bytes.len()
+                    && next_known(9)
+                    && (1e6..1e15).contains(
+                        &f64::from_be_bytes(bytes[pc + 1..pc + 9].try_into().unwrap()).abs(),
+                    )
+                {
+                    Width::Fixed(8)
+                } else if pc + 5 <= bytes.len()
+                    && next_known(5)
+                    && u32::from_be_bytes(bytes[pc + 1..pc + 5].try_into().unwrap())
+                        <= 1_000_000_000
+                {
+                    Width::Fixed(4)
+                } else if next_known(1)
+                    && widths[bytes[pc + 1] as usize] == Some(Width::String)
+                    && (bytes[pc + 1] <= 23 || bytes[pc + 1] == 33)
+                {
+                    Width::Fixed(1)
+                } else if next_known(1) {
+                    Width::Fixed(0)
+                } else if next_known(2) && bytes[pc + 1] <= 23 {
+                    Width::Fixed(1)
+                } else if pc + 2 < bytes.len()
+                    && [1, 2].contains(&bytes[pc + 1])
+                    && bytes[pc + 2] == bytes[0]
+                {
+                    Width::Fixed(1)
+                } else {
+                    Width::Fixed(0)
+                };
+                widths[opcode as usize] = Some(width);
+                width
+            }
+        };
+        raw.push(RawInstruction {
+            offset: pc,
+            opcode,
+            width,
+        });
+        pc = match width {
+            Width::Fixed(width) => pc.checked_add(width + 1).ok_or_else(resolution_error)?,
+            Width::String => string_at(bytes, pc).ok_or_else(resolution_error)?.1,
+        };
+    }
+    if pc != bytes.len() {
+        return Err(resolution_error());
+    }
+    Ok((widths, raw))
+}
+
+fn kind_before(kinds: &Kinds, raw: &[RawInstruction], index: usize) -> Option<OpKind> {
+    index
+        .checked_sub(1)
+        .and_then(|i| kinds[raw[i].opcode as usize])
+}
+
+fn infer_kinds(bytes: &[u8], raw: &[RawInstruction]) -> Result<Kinds> {
+    let mut kinds = [None; 256];
+    let first_target = u32::from_be_bytes(bytes[1..5].try_into().unwrap()) as usize;
+    let name_len = u16::from_be_bytes([bytes[first_target + 8], bytes[first_target + 9]]) as usize;
+    let set_var = bytes[first_target + 10 + name_len];
+    for (opcode, kind) in [
+        (bytes[0], OpKind::Jmp),
+        (bytes[5], OpKind::EnterScope),
+        (bytes[6], OpKind::FnEntry),
+        (bytes[first_target], OpKind::MakeFunc),
+        (bytes[first_target - 1], OpKind::Ret),
+        (bytes[first_target - 2], OpKind::LeaveScope),
+        (bytes[7], OpKind::PushStr),
+        (set_var, OpKind::SetVar),
+    ] {
+        seed_kind(&mut kinds, opcode, kind)?;
+    }
+    for &instruction in raw {
+        if instruction.width == Width::String && instruction.opcode != bytes[7] {
+            seed_kind(&mut kinds, instruction.opcode, OpKind::GetVar)?;
+        }
+    }
+
+    for (i, &instruction) in raw.iter().enumerate() {
+        let pc = instruction.offset;
+        let opcode = instruction.opcode;
+        match instruction.width {
+            Width::Fixed(4) if opcode != bytes[0] => {
+                seed_kind(&mut kinds, opcode, OpKind::PushU32)?;
+            }
+            Width::Fixed(8) => seed_kind(&mut kinds, opcode, OpKind::PushF64)?,
+            Width::Fixed(5) => {
+                let target = u32::from_be_bytes(bytes[pc + 2..pc + 6].try_into().unwrap()) as usize;
+                if target > pc {
+                    seed_kind(&mut kinds, opcode, OpKind::JBool)?;
+                    if raw[i - 1].width == Width::Fixed(0) {
+                        seed_kind(&mut kinds, raw[i - 1].opcode, OpKind::CmpLtLoop)?;
+                    }
+                } else {
+                    seed_kind(&mut kinds, opcode, OpKind::JTrue)?;
+                }
+            }
+            Width::Fixed(3) => seed_kind(&mut kinds, opcode, OpKind::Call)?,
+            Width::Fixed(1)
+                if i + 1 < raw.len() && raw[i + 1].opcode == bytes[0] && bytes[pc + 1] == 2 =>
+            {
+                seed_kind(&mut kinds, opcode, OpKind::PostInc)?;
+            }
+            _ => {}
+        }
+    }
+
+    if bytes[8] == 0 && bytes[9] == 0 {
+        seed_kind(&mut kinds, bytes[10], OpKind::PushU8)?;
+    }
+    for i in 0..raw.len().saturating_sub(3) {
+        if (0..4).all(|j| raw[i + j].opcode == raw[i].opcode && raw[i + j].width == Width::Fixed(1))
+        {
+            seed_kind(&mut kinds, raw[i].opcode, OpKind::PushU8)?;
+        }
+    }
+    for i in 0..raw.len().saturating_sub(1) {
+        if raw_text(bytes, raw[i]).is_some_and(is_property_anchor) {
+            seed_kind(&mut kinds, raw[i + 1].opcode, OpKind::PropGet)?;
+        }
+    }
+    for (i, &instruction) in raw.iter().enumerate() {
+        let opcode = instruction.opcode;
+        let previous = kind_before(&kinds, raw, i);
+        if instruction.width == Width::Fixed(1)
+            && raw
+                .get(i + 1)
+                .is_some_and(|next| kinds[next.opcode as usize] == Some(OpKind::PushStr))
+            && raw.get(i + 2).is_some_and(|next| {
+                matches!(
+                    kinds[next.opcode as usize],
+                    Some(OpKind::Call | OpKind::PropGet)
+                )
+            })
+        {
+            seed_kind(&mut kinds, opcode, OpKind::PropGet)?;
+        } else if instruction.width == Width::Fixed(1)
+            && kinds[opcode as usize].is_none()
+            && raw
+                .get(i + 1)
+                .is_some_and(|next| kinds[next.opcode as usize] == Some(OpKind::PushStr))
+            && (bytes[instruction.offset + 1] <= 23 || bytes[instruction.offset + 1] == 33)
+        {
+            seed_kind(&mut kinds, opcode, OpKind::PushU8)?;
+        }
+        if instruction.width == Width::Fixed(1)
+            && kinds[opcode as usize].is_none()
+            && ((i >= 2
+                && previous == Some(OpKind::PushU8)
+                && kind_before(&kinds, raw, i - 1) == Some(OpKind::PushU8))
+                || (bytes[instruction.offset + 1] == 0 && previous == Some(OpKind::SetVar)))
+        {
+            seed_kind(&mut kinds, opcode, OpKind::NewArray)?;
+        }
+        if raw_text(bytes, instruction).is_some_and(is_property_anchor) && i + 1 < raw.len() {
+            seed_kind(&mut kinds, raw[i + 1].opcode, OpKind::PropGet)?;
+        }
+        if instruction.width == Width::Fixed(3) {
+            seed_kind(&mut kinds, opcode, OpKind::Call)?;
+        }
+        if i > 0
+            && i + 2 < raw.len()
+            && kinds[opcode as usize].is_none()
+            && kinds[raw[i + 1].opcode as usize] == Some(OpKind::PushStr)
+            && kinds[raw[i + 2].opcode as usize] == Some(OpKind::SetVar)
+            && matches!(
+                previous,
+                Some(OpKind::SetVar | OpKind::FnEntry | OpKind::EnterScope)
+            )
+        {
+            seed_kind(&mut kinds, opcode, OpKind::PushUndefined)?;
+        }
+    }
+    seed_kind(
+        &mut kinds,
+        raw.last().ok_or_else(resolution_error)?.opcode,
+        OpKind::Halt,
+    )?;
+
+    // DJB2 exposes MUL and XOR: PUSH_U8 33; GET_VAR; MUL; XOR; GET_VAR; SET_VAR.
+    for i in 2..raw.len().saturating_sub(3) {
+        if raw[i - 2].width == Width::Fixed(1)
+            && bytes[raw[i - 2].offset + 1] == 33
+            && kinds[raw[i - 1].opcode as usize] == Some(OpKind::GetVar)
+            && kinds[raw[i + 2].opcode as usize] == Some(OpKind::GetVar)
+            && kinds[raw[i + 3].opcode as usize] == Some(OpKind::SetVar)
+        {
+            seed_kind(&mut kinds, raw[i - 2].opcode, OpKind::PushU8)?;
+            seed_kind(&mut kinds, raw[i].opcode, OpKind::Mul)?;
+            seed_kind(&mut kinds, raw[i + 1].opcode, OpKind::BitXor)?;
+        }
+    }
+    for i in 0..raw.len().saturating_sub(2) {
+        if raw[i].width == Width::Fixed(0)
+            && kinds[raw[i].opcode as usize].is_none()
+            && raw[i].opcode == raw[i + 1].opcode
+            && raw[i].opcode == raw[i + 2].opcode
+        {
+            seed_kind(&mut kinds, raw[i].opcode, OpKind::Add)?;
+        }
+    }
+
+    for (i, &instruction) in raw.iter().enumerate() {
+        let opcode = instruction.opcode;
+        if instruction.width != Width::Fixed(0) || kinds[opcode as usize].is_some() {
+            continue;
+        }
+        let previous = kind_before(&kinds, raw, i);
+        let previous2 = kind_before(&kinds, raw, i.wrapping_sub(1));
+        let next = raw.get(i + 1).and_then(|r| kinds[r.opcode as usize]);
+        let kind = match (previous, previous2, next) {
+            (_, _, Some(OpKind::LeaveScope)) => OpKind::Ushr,
+            (Some(OpKind::PushF64), _, Some(OpKind::PushU8))
+            | (Some(OpKind::PushU8), Some(OpKind::Call), Some(OpKind::PushU8)) => OpKind::Neg,
+            (Some(OpKind::Call), _, Some(OpKind::JTrue)) => OpKind::BoolNot,
+            (_, Some(OpKind::PushU8), Some(OpKind::JTrue)) => OpKind::CmpNeq,
+            (Some(OpKind::PropGet), Some(OpKind::Mod), Some(OpKind::JTrue))
+            | (_, _, Some(OpKind::JTrue))
+                if previous != Some(OpKind::PropGet) && previous != Some(OpKind::PushStr) =>
+            {
+                OpKind::CmpEq
+            }
+            (Some(OpKind::PropGet), _, Some(OpKind::JTrue)) => OpKind::CmpType,
+            (Some(OpKind::PushStr), Some(OpKind::GetVar), Some(OpKind::JTrue)) => OpKind::InOp,
+            (_, _, Some(OpKind::PropGet | OpKind::CmpEq))
+            | (Some(OpKind::Call), _, Some(OpKind::GetVar)) => OpKind::Mod,
+            (Some(OpKind::GetVar), Some(OpKind::Add), Some(OpKind::PushU8)) => OpKind::Div,
+            _ => continue,
+        };
+        seed_kind(&mut kinds, opcode, kind)?;
+    }
+
+    // Integer packing exposes SHR, SHL, and OR as one expression.
+    for i in 0..raw.len().saturating_sub(6) {
+        if [0, 3, 4]
+            .iter()
+            .all(|j| kinds[raw[i + j].opcode as usize].is_none())
+            && kinds[raw[i + 1].opcode as usize] == Some(OpKind::GetVar)
+            && kinds[raw[i + 2].opcode as usize] == Some(OpKind::GetVar)
+            && kinds[raw[i + 5].opcode as usize] == Some(OpKind::GetVar)
+            && kinds[raw[i + 6].opcode as usize] == Some(OpKind::SetVar)
+        {
+            seed_kind(&mut kinds, raw[i].opcode, OpKind::Shr)?;
+            seed_kind(&mut kinds, raw[i + 3].opcode, OpKind::Shl)?;
+            seed_kind(&mut kinds, raw[i + 4].opcode, OpKind::BitOr)?;
+        }
+    }
+    for (i, &instruction) in raw.iter().enumerate() {
+        let opcode = instruction.opcode;
+        if instruction.width != Width::Fixed(0) || kinds[opcode as usize].is_some() {
+            continue;
+        }
+        let previous = kind_before(&kinds, raw, i);
+        let next = raw.get(i + 1).and_then(|r| kinds[r.opcode as usize]);
+        let kind = match (previous, next) {
+            (Some(OpKind::GetVar), Some(OpKind::Sub)) => OpKind::Shl,
+            (_, Some(OpKind::GetVar | OpKind::PushU8)) => OpKind::Sub,
+            (_, Some(OpKind::Add | OpKind::BitXor | OpKind::Sub)) => OpKind::Mul,
+            _ => continue,
+        };
+        seed_kind(&mut kinds, opcode, kind)?;
+    }
+    for &instruction in raw {
+        if instruction.width == Width::Fixed(1) && kinds[instruction.opcode as usize].is_none() {
+            seed_kind(&mut kinds, instruction.opcode, OpKind::SetTry)?;
+        }
+    }
+    Ok(kinds)
+}
+
+fn decode_resolved(
+    bytes: &[u8],
+    raw: &[RawInstruction],
+    kinds: &Kinds,
+) -> Result<Vec<Instruction>> {
+    raw.iter()
+        .map(|instruction| {
+            let pc = instruction.offset;
+            let kind = kinds[instruction.opcode as usize].ok_or(CodecError::Unsupported {
+                offset: pc,
+                opcode: instruction.opcode,
+            })?;
+            let fixed = |width: usize| instruction.width == Width::Fixed(width);
+            let op = match kind {
+                OpKind::Jmp if fixed(4) => Op::Jmp(u32::from_be_bytes(
+                    bytes[pc + 1..pc + 5].try_into().unwrap(),
+                )),
+                OpKind::JBool | OpKind::JTrue if fixed(5) => {
+                    let cond = bytes[pc + 1];
+                    let target = u32::from_be_bytes(bytes[pc + 2..pc + 6].try_into().unwrap());
+                    if kind == OpKind::JBool {
+                        Op::JBool { cond, target }
+                    } else {
+                        Op::JTrue { cond, target }
+                    }
+                }
+                OpKind::MakeFunc if fixed(6) => Op::MakeFunc {
+                    arity: u16::from_be_bytes([bytes[pc + 1], bytes[pc + 2]]),
+                    entry: u32::from_be_bytes(bytes[pc + 3..pc + 7].try_into().unwrap()),
+                },
+                OpKind::SetTry if fixed(1) => Op::SetTry(bytes[pc + 1]),
+                OpKind::EnterScope if fixed(0) => Op::EnterScope,
+                OpKind::LeaveScope if fixed(0) => Op::LeaveScope,
+                OpKind::Ret if fixed(0) => Op::Ret,
+                OpKind::FnEntry if fixed(0) => Op::FnEntry,
+                OpKind::PushUndefined if fixed(0) => Op::PushUndefined,
+                OpKind::PushStr | OpKind::GetVar if instruction.width == Width::String => {
+                    let text = String::from_utf8_lossy(raw_text(bytes, *instruction).unwrap())
+                        .into_owned();
+                    if kind == OpKind::PushStr {
+                        Op::PushStr(text)
+                    } else {
+                        Op::GetVar(text)
+                    }
+                }
+                OpKind::SetVar if fixed(1) => Op::SetVar(bytes[pc + 1]),
+                OpKind::PushU8 if fixed(1) => Op::PushU8(bytes[pc + 1]),
+                OpKind::PushU32 if fixed(4) => Op::PushU32(u32::from_be_bytes(
+                    bytes[pc + 1..pc + 5].try_into().unwrap(),
+                )),
+                OpKind::PushF64 if fixed(8) => Op::PushF64(f64::from_be_bytes(
+                    bytes[pc + 1..pc + 9].try_into().unwrap(),
+                )),
+                OpKind::PropGet if fixed(1) => Op::PropGet(bytes[pc + 1]),
+                OpKind::Call if fixed(3) => Op::Call {
+                    keep_return: bytes[pc + 1],
+                    argc: u16::from_be_bytes([bytes[pc + 2], bytes[pc + 3]]),
+                },
+                OpKind::NewArray if fixed(1) => Op::NewArray(bytes[pc + 1]),
+                OpKind::PostInc if fixed(1) => Op::PostInc(bytes[pc + 1]),
+                OpKind::Halt if fixed(0) => Op::Halt,
+                OpKind::Add if fixed(0) => Op::Add,
+                OpKind::Sub if fixed(0) => Op::Sub,
+                OpKind::Mul if fixed(0) => Op::Mul,
+                OpKind::Div if fixed(0) => Op::Div,
+                OpKind::Mod if fixed(0) => Op::Mod,
+                OpKind::BitXor if fixed(0) => Op::BitXor,
+                OpKind::Shl if fixed(0) => Op::Shl,
+                OpKind::Shr if fixed(0) => Op::Shr,
+                OpKind::BitOr if fixed(0) => Op::BitOr,
+                OpKind::Ushr if fixed(0) => Op::Ushr,
+                OpKind::Neg if fixed(0) => Op::Neg,
+                OpKind::BoolNot if fixed(0) => Op::BoolNot,
+                OpKind::CmpLtLoop if fixed(0) => Op::CmpLtLoop,
+                OpKind::CmpEq if fixed(0) => Op::CmpEq,
+                OpKind::CmpNeq if fixed(0) => Op::CmpNeq,
+                OpKind::CmpType if fixed(0) => Op::CmpType,
+                OpKind::InOp if fixed(0) => Op::InOp,
+                _ => return Err(resolution_error()),
+            };
+            Ok(Instruction { offset: pc, op })
+        })
+        .collect()
+}
+
+/// Disassemble a TLV stream after resolving its per-build opcode encoding.
+pub fn try_disassemble(bytes: &[u8]) -> Result<Vec<Instruction>> {
+    let (_, raw) = infer_widths(bytes)?;
+    let kinds = infer_kinds(bytes, &raw)?;
+    decode_resolved(bytes, &raw, &kinds)
+}
+
+/// Disassemble a TLV bytecode stream with exact operand widths.
+///
+/// Invalid or unsupported streams retain the original best-effort decoder;
+/// use [`try_disassemble`] to reject them instead.
+pub fn disassemble(bytes: &[u8]) -> Vec<Instruction> {
+    try_disassemble(bytes).unwrap_or_else(|_| disassemble_legacy(bytes))
 }
 
 /// Extract the 23-element permutation bijections (`kT`) from Blob 0.
@@ -474,7 +1094,7 @@ impl Vm {
         args: &[Value],
         host: &mut dyn Host,
     ) -> Result<Value> {
-        let insts = disassemble(bytes);
+        let insts = try_disassemble(bytes)?;
         let offset_to_idx: BTreeMap<usize, usize> = insts
             .iter()
             .enumerate()

@@ -22,7 +22,7 @@ use akamai_codec::script::{analyze_script, report_json};
 use akamai_codec::sensor::{
     DEFAULT_SUB_KEY, Envelope, bm_sz_seed, decode_body, encode_body, recover_v3_shuffle_key,
 };
-use akamai_codec::vm::{disassemble, permutation_tables, selector_keys};
+use akamai_codec::vm::{permutation_tables, selector_keys, try_disassemble};
 
 const USAGE: &str = "\
 usage: akamai-codec <subcommand> [options]
@@ -341,7 +341,7 @@ fn cmd_vm(args: &[String]) -> Result<(), String> {
             println!("keys:    {keys:?}");
         }
     } else {
-        for inst in disassemble(&bytes) {
+        for inst in try_disassemble(&bytes).map_err(|e| e.to_string())? {
             println!("{:04x}  {:?}", inst.offset, inst.op);
         }
     }
