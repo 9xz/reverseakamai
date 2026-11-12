@@ -297,15 +297,22 @@ impl BuildTemplate {
 
     /// Statically extract `(shuffle_key, ver)` from a served `bmak` script and
     /// bind them to the native 3-post v3 schema and [`DeviceProfile`].
+    ///
+    /// Returns an error if either build-specific value cannot be extracted;
+    /// neither value falls back to the bundled template.
     pub fn from_bmak_script(source: &str, device: Option<&DeviceProfile>) -> Result<Self> {
+        let report = analyze_script(source);
+        let shuffle_key = report
+            .shuffle_key
+            .ok_or_else(|| CodecError::Key("unable to extract bmak shuffle_key".to_owned()))?;
+        let ver = report
+            .version_token
+            .ok_or_else(|| CodecError::Format("unable to extract bmak ver".to_owned()))?;
         let default_val: Value = serde_json::from_str(DEFAULT_V3_TEMPLATE_JSON)
             .map_err(|e| CodecError::Format(e.to_string()))?;
         let mut tpl = Self::from_json(&default_val)?;
-        let report = analyze_script(source);
         tpl.script_sha256 = report.sha256;
-        if let Some(shuf) = report.shuffle_key {
-            tpl.shuffle_key = shuf;
-        }
+        tpl.shuffle_key = shuffle_key;
         let profile = device.cloned().unwrap_or_default();
         let ucs = profile.ua_ascii_sum().to_string();
         let swi = profile.screen.width.to_string();
@@ -326,12 +333,10 @@ impl BuildTemplate {
             .unwrap_or(&profile.user_agent)
             .to_owned();
         for post in &mut tpl.posts {
-            if let Some(ver) = &report.version_token {
-                if post.header.len() >= 6 {
-                    post.header[5] = ver.clone();
-                }
-                post.plaintext = patch_json_str(&post.plaintext, "ver", ver);
+            if post.header.len() >= 6 {
+                post.header[5] = ver.clone();
             }
+            post.plaintext = patch_json_str(&post.plaintext, "ver", &ver);
             let patched_str = patch_json_fields(
                 std::mem::take(&mut post.plaintext),
                 &[
@@ -554,6 +559,45 @@ mod tests {
     #[test]
     fn v2_checksum_matches_formula() {
         assert_eq!(checksum_v2("ABC"), (65 + 66 + 67) ^ 24);
+    }
+
+    #[test]
+    fn bmak_template_requires_both_build_values() {
+        let shuffle = "s8=fA(G9,[['CAr3qAAAAAA','C','r5','b3Mrf','C5rCrbM5r3qAAAAAA','C595bbf','9f99bAMqAAAAAA','f5','b33f3qAAAAAA','9999999','bC3f9rI','IA5C','5AC9','fbAA','CArb','9Ir5','Ibf9C','f5Mb9','IfIAM5','5','I3','I5AA','IAAA'],0]);";
+        // 'b' XOR '#' gives the 20-byte 'A' key; 'q' XOR 'A' is '0'.
+        let ver = format!("{}=", "0".repeat(43));
+        let table = format!(
+            "return [\"{}|\",\"{}\",\"{}\",\"{}\"];",
+            "q".repeat(43),
+            "b".repeat(20),
+            "#".repeat(21),
+            "x".repeat(450),
+        );
+        for source in ["", "const bmak = {};", table.as_str()] {
+            assert!(matches!(
+                BuildTemplate::from_bmak_script(source, None),
+                Err(CodecError::Key(message)) if message.contains("shuffle_key")
+            ));
+        }
+        assert!(matches!(
+            BuildTemplate::from_bmak_script(shuffle, None),
+            Err(CodecError::Format(message)) if message.contains("ver")
+        ));
+
+        let tpl = BuildTemplate::from_bmak_script(&format!("{shuffle}{table}"), None)
+            .expect("both build values extracted");
+        assert_eq!(tpl.shuffle_key, 6_453_891);
+        for index in 0..tpl.posts.len() {
+            let payload = tpl
+                .encode_post(index, 5_555_555, "https://example.com/")
+                .unwrap();
+            let outer: Value = serde_json::from_str(&payload).unwrap();
+            let env = Envelope::parse(outer["sensor_data"].as_str().unwrap(), 0).unwrap();
+            assert_eq!(env.header[5], ver);
+            let decoded = decode_body(&env.ciphertext, ':', 5_555_555, Some(6_453_891));
+            let plaintext: Value = serde_json::from_str(&decoded).unwrap();
+            assert_eq!(plaintext["ver"], ver);
+        }
     }
 
     #[test]
