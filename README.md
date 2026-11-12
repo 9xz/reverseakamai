@@ -70,9 +70,14 @@ let cookie_header = client.cookie_header("https://www.bestbuy.com/")?;
 - **XOR String Tables (`ver`):** The 44-character Base64 build version token (`ver`) is stored in the script's string-table array and XORed against a 20-byte key derived from two sibling entries (`s20[k] ^ master[offset + k]`).
 
 ### 3. Two-Pass 23-Bit LCG Cipher (`v2` & `v3`)
-Driven by $s_{n+1} = (s_n \times 65793 + 4282663) \ \& \ \text{0x7fffff}$ with 16-bit draw $\text{draw}(s) = (s \gg 8) \ \& \ \text{0xffff}$:
-1. **Pass 1 — Token Permutation (`shuffle_key`):** Splits the serialized JSON body on `,` (`v2`) or `:` (`v3`) into $N$ tokens and performs $N$ Fisher-Yates swaps using $\text{draw}(s) \bmod N$.
-2. **Pass 2 — 92-Char ASCII Substitution (`sub_key` from `bm_sz`):** Rotates each byte in printable ASCII `32..=126` (excluding `"`, `'`, `\`) by $\text{draw}(s) \bmod 92$, stepping the LCG on every byte.
+
+```text
+state = (state * 65793 + 4282663) & 0x7fffff
+draw(state) = (state >> 8) & 0xffff
+```
+
+1. **Pass 1 — Token Permutation (`shuffle_key`):** Splits the serialized JSON body on `,` (`v2`) or `:` (`v3`) into `N` tokens and performs `N` Fisher-Yates swaps using `draw(state) % N`.
+2. **Pass 2 — 92-Char ASCII Substitution (`sub_key` from `bm_sz`):** Rotates each byte in printable ASCII `32..=126` (excluding `"`, `'`, `\`) by `draw(state) % 92`, stepping the LCG on every byte.
 
 ### 4. Secondary Challenges (`SBSD`, `Pixel`, `sec-cpt`)
 - **SBSD (State-Based Scraping Detection):** Script tag carrying `?v=<uuid>` (plus `&t=<token>` on active interstitials). Posts `{"body":"<cipher>"}` seeded by `bm_so` / `sbsd_o` to mint `bm_s` and `bm_sc`.
