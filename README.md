@@ -1,6 +1,6 @@
 # reverseakamai
 
-Pure-Rust SDK for Akamai Bot Manager web challenges (`bmak` v2/v3, `SBSD`, `/akam/13/` pixel, `sec-cpt` PoW, and the BMP TLV bytecode VM)—no JS engine, no headless browser.
+Pure-Rust, sandbox-free SDK for Akamai Bot Manager web challenges (`bmak` v2/v3, `SBSD`, `/akam/13/` pixel, `sec-cpt` PoW, and the BMP TLV bytecode VM).
 
 > [!IMPORTANT]
 > **Need browser or mobile automation in production?** Static solvers break as script builds, VM opcodes, and mobile BMP/BAP SDKs rotate. [**Distilled**](https://distilled.cx) runs real ARM64 Android phones in the cloud with hardware-backed device identities, mobile proxies, and API, MCP and ADB control.
