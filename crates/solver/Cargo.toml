@@ -1,0 +1,19 @@
+[package]
+name = "akamai-solver"
+description = "Drive the served Akamai sensor script and submit its sensor_data payload"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+akamai-codec = { path = "../codec" }
+native-payload.workspace = true
+wreq.workspace = true
+wreq-util.workspace = true
+tokio.workspace = true
+serde_json.workspace = true
+serde = { version = "1", features = ["derive"] }
+psl = "2"
+url.workspace = true

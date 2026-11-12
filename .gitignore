@@ -1,0 +1,10 @@
+/target
+/docs
+/tools
+/captures
+/crates/akamai-probe
+/.idea
+/*.txt
+/*.har
+/*.HAR
+.DS_Store

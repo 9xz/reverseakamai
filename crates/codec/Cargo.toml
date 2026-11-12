@@ -1,0 +1,18 @@
+[package]
+name = "akamai-codec"
+description = "Akamai sensor payload codec, challenge solvers and BMP VM tooling"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "akamai-codec"
+path = "src/main.rs"
+
+[dependencies]
+native-payload.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+serde_json.workspace = true

@@ -1,0 +1,382 @@
+   0: JMP          ->944
+   5: ENTER_SCOPE
+   6: FN_ENTRY
+   7: PUSH_STR     'wT'
+  12: SET_VAR      mode=0
+  14: PUSH_STR     'cw'
+  19: SET_VAR      mode=0
+  21: DECL_VAR
+  22: PUSH_STR     'kT'
+  27: SET_VAR      mode=0
+  29: DECL_VAR
+  30: PUSH_STR     'Eq'
+  35: SET_VAR      mode=0
+  37: PUSH_U8      2
+  39: PUSH_U8      0
+  41: PUSH_U8      12
+  43: PUSH_U8      0
+  45: PUSH_U8      10
+  47: PUSH_U8      0
+  49: PUSH_U8      11
+  51: PUSH_U8      0
+  53: PUSH_U8      20
+  55: PUSH_U8      0
+  57: PUSH_U8      17
+  59: PUSH_U8      0
+  61: PUSH_U8      13
+  63: PUSH_U8      0
+  65: PUSH_U8      6
+  67: PUSH_U8      0
+  69: PUSH_U8      5
+  71: PUSH_U8      0
+  73: PUSH_U8      0
+  75: PUSH_U8      0
+  77: PUSH_U8      3
+  79: PUSH_U8      0
+  81: PUSH_U8      21
+  83: PUSH_U8      0
+  85: PUSH_U8      18
+  87: PUSH_U8      0
+  89: PUSH_U8      22
+  91: PUSH_U8      0
+  93: PUSH_U8      19
+  95: PUSH_U8      0
+  97: PUSH_U8      7
+  99: PUSH_U8      0
+ 101: PUSH_U8      8
+ 103: PUSH_U8      0
+ 105: PUSH_U8      14
+ 107: PUSH_U8      0
+ 109: PUSH_U8      1
+ 111: PUSH_U8      0
+ 113: PUSH_U8      4
+ 115: PUSH_U8      0
+ 117: PUSH_U8      16
+ 119: PUSH_U8      0
+ 121: PUSH_U8      9
+ 123: PUSH_U8      0
+ 125: PUSH_U8      15
+ 127: PUSH_U8      0
+ 129: NEW_ARRAY    len=23
+ 131: PUSH_U8      0
+ 133: PUSH_U8      13
+ 135: PUSH_U8      0
+ 137: PUSH_U8      11
+ 139: PUSH_U8      0
+ 141: PUSH_U8      1
+ 143: PUSH_U8      0
+ 145: PUSH_U8      15
+ 147: PUSH_U8      0
+ 149: PUSH_U8      20
+ 151: PUSH_U8      0
+ 153: PUSH_U8      21
+ 155: PUSH_U8      0
+ 157: PUSH_U8      22
+ 159: PUSH_U8      0
+ 161: PUSH_U8      2
+ 163: PUSH_U8      0
+ 165: PUSH_U8      3
+ 167: PUSH_U8      0
+ 169: PUSH_U8      0
+ 171: PUSH_U8      0
+ 173: PUSH_U8      9
+ 175: PUSH_U8      0
+ 177: PUSH_U8      6
+ 179: PUSH_U8      0
+ 181: PUSH_U8      16
+ 183: PUSH_U8      0
+ 185: PUSH_U8      12
+ 187: PUSH_U8      0
+ 189: PUSH_U8      10
+ 191: PUSH_U8      0
+ 193: PUSH_U8      5
+ 195: PUSH_U8      0
+ 197: PUSH_U8      18
+ 199: PUSH_U8      0
+ 201: PUSH_U8      8
+ 203: PUSH_U8      0
+ 205: PUSH_U8      17
+ 207: PUSH_U8      0
+ 209: PUSH_U8      7
+ 211: PUSH_U8      0
+ 213: PUSH_U8      4
+ 215: PUSH_U8      0
+ 217: PUSH_U8      14
+ 219: PUSH_U8      0
+ 221: PUSH_U8      19
+ 223: PUSH_U8      0
+ 225: NEW_ARRAY    len=23
+ 227: PUSH_U8      0
+ 229: PUSH_U8      22
+ 231: PUSH_U8      0
+ 233: PUSH_U8      8
+ 235: PUSH_U8      0
+ 237: PUSH_U8      6
+ 239: PUSH_U8      0
+ 241: PUSH_U8      16
+ 243: PUSH_U8      0
+ 245: PUSH_U8      5
+ 247: PUSH_U8      0
+ 249: PUSH_U8      7
+ 251: PUSH_U8      0
+ 253: PUSH_U8      10
+ 255: PUSH_U8      0
+ 257: PUSH_U8      3
+ 259: PUSH_U8      0
+ 261: PUSH_U8      4
+ 263: PUSH_U8      0
+ 265: PUSH_U8      19
+ 267: PUSH_U8      0
+ 269: PUSH_U8      9
+ 271: PUSH_U8      0
+ 273: PUSH_U8      14
+ 275: PUSH_U8      0
+ 277: PUSH_U8      13
+ 279: PUSH_U8      0
+ 281: PUSH_U8      1
+ 283: PUSH_U8      0
+ 285: PUSH_U8      2
+ 287: PUSH_U8      0
+ 289: PUSH_U8      11
+ 291: PUSH_U8      0
+ 293: PUSH_U8      18
+ 295: PUSH_U8      0
+ 297: PUSH_U8      21
+ 299: PUSH_U8      0
+ 301: PUSH_U8      20
+ 303: PUSH_U8      0
+ 305: PUSH_U8      17
+ 307: PUSH_U8      0
+ 309: PUSH_U8      15
+ 311: PUSH_U8      0
+ 313: PUSH_U8      0
+ 315: PUSH_U8      0
+ 317: PUSH_U8      12
+ 319: PUSH_U8      0
+ 321: NEW_ARRAY    len=23
+ 323: PUSH_U8      0
+ 325: PUSH_U8      9
+ 327: PUSH_U8      0
+ 329: PUSH_U8      1
+ 331: PUSH_U8      0
+ 333: PUSH_U8      6
+ 335: PUSH_U8      0
+ 337: PUSH_U8      15
+ 339: PUSH_U8      0
+ 341: PUSH_U8      4
+ 343: PUSH_U8      0
+ 345: PUSH_U8      16
+ 347: PUSH_U8      0
+ 349: PUSH_U8      7
+ 351: PUSH_U8      0
+ 353: PUSH_U8      18
+ 355: PUSH_U8      0
+ 357: PUSH_U8      22
+ 359: PUSH_U8      0
+ 361: PUSH_U8      17
+ 363: PUSH_U8      0
+ 365: PUSH_U8      20
+ 367: PUSH_U8      0
+ 369: PUSH_U8      2
+ 371: PUSH_U8      0
+ 373: PUSH_U8      8
+ 375: PUSH_U8      0
+ 377: PUSH_U8      19
+ 379: PUSH_U8      0
+ 381: PUSH_U8      5
+ 383: PUSH_U8      0
+ 385: PUSH_U8      21
+ 387: PUSH_U8      0
+ 389: PUSH_U8      12
+ 391: PUSH_U8      0
+ 393: PUSH_U8      14
+ 395: PUSH_U8      0
+ 397: PUSH_U8      10
+ 399: PUSH_U8      0
+ 401: PUSH_U8      11
+ 403: PUSH_U8      0
+ 405: PUSH_U8      3
+ 407: PUSH_U8      0
+ 409: PUSH_U8      0
+ 411: PUSH_U8      0
+ 413: PUSH_U8      13
+ 415: PUSH_U8      0
+ 417: NEW_ARRAY    len=23
+ 419: PUSH_U8      0
+ 421: PUSH_U8      10
+ 423: PUSH_U8      0
+ 425: PUSH_U8      11
+ 427: PUSH_U8      0
+ 429: PUSH_U8      21
+ 431: PUSH_U8      0
+ 433: PUSH_U8      8
+ 435: PUSH_U8      0
+ 437: PUSH_U8      2
+ 439: PUSH_U8      0
+ 441: PUSH_U8      5
+ 443: PUSH_U8      0
+ 445: PUSH_U8      6
+ 447: PUSH_U8      0
+ 449: PUSH_U8      1
+ 451: PUSH_U8      0
+ 453: PUSH_U8      3
+ 455: PUSH_U8      0
+ 457: PUSH_U8      4
+ 459: PUSH_U8      0
+ 461: PUSH_U8      12
+ 463: PUSH_U8      0
+ 465: PUSH_U8      20
+ 467: PUSH_U8      0
+ 469: PUSH_U8      22
+ 471: PUSH_U8      0
+ 473: PUSH_U8      16
+ 475: PUSH_U8      0
+ 477: PUSH_U8      17
+ 479: PUSH_U8      0
+ 481: PUSH_U8      13
+ 483: PUSH_U8      0
+ 485: PUSH_U8      19
+ 487: PUSH_U8      0
+ 489: PUSH_U8      18
+ 491: PUSH_U8      0
+ 493: PUSH_U8      14
+ 495: PUSH_U8      0
+ 497: PUSH_U8      0
+ 499: PUSH_U8      0
+ 501: PUSH_U8      9
+ 503: PUSH_U8      0
+ 505: PUSH_U8      7
+ 507: PUSH_U8      0
+ 509: PUSH_U8      15
+ 511: PUSH_U8      0
+ 513: NEW_ARRAY    len=23
+ 515: PUSH_U8      0
+ 517: NEW_ARRAY    len=5
+ 519: GET_VAR      'kT'
+ 524: SET_VAR      mode=0
+ 526: PUSH_F64     672905826579.0
+ 535: PUSH_U8      0
+ 537: PUSH_U32     322132545
+ 542: PUSH_U8      0
+ 544: PUSH_U32     349450134
+ 549: PUSH_U8      0
+ 551: PUSH_F64     167822523239.0
+ 560: NEG          (unary -)
+ 561: PUSH_U8      0
+ 563: PUSH_F64     504109940950.0
+ 572: NEG          (unary -)
+ 573: PUSH_U8      0
+ 575: NEW_ARRAY    len=5
+ 577: GET_VAR      'Eq'
+ 582: SET_VAR      mode=0
+ 584: JMP          ->857
+ 589: ENTER_SCOPE
+ 590: DECL_VAR
+ 591: PUSH_STR     'SA'
+ 596: SET_VAR      mode=0
+ 598: DECL_VAR
+ 599: PUSH_STR     'pr'
+ 604: SET_VAR      mode=0
+ 606: DECL_VAR
+ 607: PUSH_STR     'Lq'
+ 612: SET_VAR      mode=0
+ 614: GET_VAR      'cw'
+ 619: PUSH_U8      0
+ 621: GET_VAR      'Eq'
+ 626: PUSH_STR     'indexOf'
+ 636: PROP_GET     mode=0
+ 638: CALL         this=1 argc=1
+ 642: GET_VAR      'SA'
+ 647: SET_VAR      mode=0
+ 649: JMP          ->670
+ 654: ENTER_SCOPE
+ 655: GET_VAR      'wT'
+ 660: LEAVE_SCOPE
+ 661: LEAVE_SCOPE
+ 662: LEAVE_SCOPE
+ 663: RET
+ 664: LEAVE_SCOPE
+ 665: JMP          ->685
+ 670: PUSH_U8      1
+ 672: NEG          (unary -)
+ 673: GET_VAR      'SA'
+ 678: CMP_EQ       (===)
+ 679: JTRUE_0      ->654
+ 685: GET_VAR      'kT'
+ 690: GET_VAR      'SA'
+ 695: PROP_GET     mode=1
+ 697: GET_VAR      'pr'
+ 702: SET_VAR      mode=0
+ 704: NEW_ARRAY    len=0
+ 706: GET_VAR      'Lq'
+ 711: SET_VAR      mode=0
+ 713: PUSH_U8      0
+ 715: PUSH_STR     'WR'
+ 720: SET_VAR      mode=0
+ 722: GET_VAR      'pr'
+ 727: PUSH_STR     'length'
+ 736: PROP_GET     mode=1
+ 738: GET_VAR      'WR'
+ 743: CMP_LT_LOOP  (<)
+ 744: JBOOL_0      ->843
+ 750: ENTER_SCOPE
+ 751: DECL_VAR
+ 752: PUSH_STR     'MI'
+ 757: SET_VAR      mode=0
+ 759: GET_VAR      'pr'
+ 764: GET_VAR      'WR'
+ 769: PROP_GET     mode=1
+ 771: GET_VAR      'MI'
+ 776: SET_VAR      mode=0
+ 778: JMP          ->816
+ 783: ENTER_SCOPE
+ 784: GET_VAR      'wT'
+ 789: GET_VAR      'MI'
+ 794: PROP_GET     mode=1
+ 796: GET_VAR      'Lq'
+ 801: GET_VAR      'WR'
+ 806: PROP_GET     mode=1
+ 808: SET_VAR      mode=0
+ 810: LEAVE_SCOPE
+ 811: JMP          ->830
+ 816: PUSH_U8      0
+ 818: GET_VAR      'MI'
+ 823: CMP_NEQ      (!==)
+ 824: JTRUE_0      ->783
+ 830: LEAVE_SCOPE
+ 831: GET_VAR      'WR'
+ 836: POST_INC     mode=2
+ 838: JMP          ->722
+ 843: GET_VAR      'Lq'
+ 848: LEAVE_SCOPE
+ 849: LEAVE_SCOPE
+ 850: RET
+ 851: LEAVE_SCOPE
+ 852: JMP          ->942
+ 857: GET_VAR      'kT'
+ 862: PUSH_U8      0
+ 864: GET_VAR      'Array'
+ 872: PUSH_STR     'isArray'
+ 882: PROP_GET     mode=0
+ 884: CALL         this=1 argc=1
+ 888: JBOOL_1      ->925
+ 894: GET_VAR      'Eq'
+ 899: PUSH_U8      0
+ 901: GET_VAR      'Array'
+ 909: PUSH_STR     'isArray'
+ 919: PROP_GET     mode=0
+ 921: CALL         this=1 argc=1
+ 925: BOOL_NOT     (!)
+ 926: JTRUE_0      ->589
+ 932: ENTER_SCOPE
+ 933: GET_VAR      'wT'
+ 938: LEAVE_SCOPE
+ 939: LEAVE_SCOPE
+ 940: RET
+ 941: LEAVE_SCOPE
+ 942: LEAVE_SCOPE
+ 943: RET
+ 944: MAKE_FUNC    arity=2 entry=5
+ 951: PUSH_STR     'Bk'
+ 956: SET_VAR      mode=0
+ 958: HALT
