@@ -3,11 +3,12 @@
 //! Generation 2 and generation 3 share the cipher core: a 92-character
 //! substitution over ASCII 32..=126 minus `"`, `'` and `\`, driven by this
 //! LCG, plus an element permutation whose key differs per generation.
+//! Substitution advances once per UTF-16 code unit, matching JavaScript.
 
 pub use native_payload::cipher::{
-    ALPHABET_92 as ALPHABET, desubstitute_92 as desubstitute, draw_lcg23 as draw, permute,
-    permute_join, step_lcg23 as step, substitute_92 as substitute, swaps_lcg23 as swaps, unpermute,
-    unpermute_join,
+    ALPHABET_92 as ALPHABET, desubstitute_92_utf16 as desubstitute, draw_lcg23 as draw, permute,
+    permute_join, step_lcg23 as step, substitute_92_utf16 as substitute, swaps_lcg23 as swaps,
+    unpermute, unpermute_join,
 };
 
 #[cfg(test)]
@@ -35,6 +36,14 @@ mod tests {
     fn substitution_is_keyed() {
         let text = "the quick brown fox";
         assert_ne!(substitute(text, 1), substitute(text, 2));
+    }
+
+    #[test]
+    fn unicode_substitution_matches_javascript_utf16() {
+        let plain = "a’b é🙂z";
+        let encoded = "F’Poé🙂}";
+        assert_eq!(substitute(plain, 4_538_946), encoded);
+        assert_eq!(desubstitute(encoded, 4_538_946), plain);
     }
 
     #[test]

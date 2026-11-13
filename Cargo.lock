@@ -737,7 +737,7 @@ dependencies = [
 [[package]]
 name = "native-payload"
 version = "0.1.0"
-source = "git+https://github.com/9xz/native-payload#61ca5cc232f4e1584168077008d0f671ac6cbb98"
+source = "git+https://github.com/9xz/native-payload#7e90f991a4964fc9dd4a2cfa59accda2393f4f61"
 dependencies = [
  "serde_json",
  "sha1",

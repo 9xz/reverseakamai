@@ -6,7 +6,9 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
-use native_payload::template::parse_js_string_array;
+mod literals;
+
+use literals::string_arrays;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 /// Coarse, heuristic script family for build inventory.
@@ -136,147 +138,233 @@ fn count_catch_splice_markers(source: &str) -> usize {
     count
 }
 
-/// Statically extract the `bmak` v3 `shuffle_key` (`s8[10]`) from the digit-ciphered
-/// `s8` constant array (`4294967295.000000`, `8388607.000000`, `8888888`).
+/// Extract the per-build shuffle seed from either supported numeric-table layout.
+/// The mathematical anchors validate the layout and the digit substitution;
+/// the seed itself is always decoded from the served table.
 pub fn extract_bmak_shuffle_key(source: &str) -> Option<u32> {
-    let mut cursor = 0;
-    while let Some(rel) = source[cursor..].find("[['") {
-        let start = cursor + rel + 1;
-        cursor = start + 2;
-        let slice = &source[start..source.len().min(start + 2048)];
-        let arr = parse_js_string_array(slice);
-        if arr.len() < 23 {
-            continue;
-        }
-        let s4 = arr[4].as_bytes();
-        let s6 = arr[6].as_bytes();
-        let s9 = arr[9].as_bytes();
-        if s4.len() != 17 || s6.len() != 14 || s9.len() != 7 || !s9.iter().all(|&b| b == s9[0]) {
-            continue;
-        }
-        let zero_ch = s4[11];
-        if !s4[11..17].iter().all(|&b| b == zero_ch) {
-            continue;
-        }
-        let mut map = [255u8; 256];
-        map[zero_ch as usize] = 0;
-        map[s4[1] as usize] = 2;
-        map[s6[1] as usize] = 3;
-        map[s4[0] as usize] = 4;
-        map[s4[9] as usize] = 5;
-        map[s4[5] as usize] = 6;
-        map[s4[6] as usize] = 7;
-        map[s6[0] as usize] = 8;
-        map[s4[2] as usize] = 9;
-        for item in &arr {
-            let b = item.as_bytes();
-            if b.len() == 4
-                && b[1] == zero_ch
-                && b[2] == zero_ch
-                && b[3] == zero_ch
-                && map[b[0] as usize] == 255
-            {
-                map[b[0] as usize] = 1;
-                break;
-            }
-        }
-        let mut value = 0u32;
-        for &ch in arr[10].as_bytes() {
-            let digit = map[ch as usize];
-            if digit > 9 {
-                return None;
-            }
-            value = value.checked_mul(10)?.checked_add(u32::from(digit))?;
-        }
-        return Some(value);
-    }
-    None
-}
-
-/// Statically extract the 44-character Base64 `ver` constant from a `bmak` v3 script's
-/// XOR-encoded string table arrays.
-pub fn extract_bmak_ver(source: &str) -> Option<String> {
-    for marker in ["return [\"", "W2=[\""] {
-        let mut cursor = 0;
-        while let Some(rel) = source[cursor..].find(marker) {
-            let bracket = cursor + rel + marker.len() - 2;
-            cursor = bracket + 2;
-            let Some(end_rel) = source[bracket..].find("];") else {
+    const LEGACY: &[(usize, &[u8])] = &[
+        (4, b"4294967295.000000"),
+        (6, b"8388607.000000"),
+        (8, b"65535.000000"),
+        (9, b"8888888"),
+    ];
+    const CURRENT: &[(usize, &[u8])] = &[
+        (0, b"4095.000000"),
+        (5, b"65535.000000"),
+        (6, b"65793"),
+        (7, b"4282663"),
+        (8, b"8388607.000000"),
+        (9, b"4294967295.000000"),
+        (10, b"3"),
+    ];
+    let arrays: Vec<_> = string_arrays(source).collect();
+    let mut matched = None;
+    for arr in &arrays {
+        for (anchors, key_index) in [(LEGACY, 10), (CURRENT, 11)] {
+            let Some(map) = anchors.iter().try_fold([255; 256], |map, &(index, plain)| {
+                extend_digit_map(map, arr.get(index)?.as_bytes(), plain)
+            }) else {
                 continue;
             };
-            if !(500..=250_000).contains(&end_rel) {
+            let strings: Vec<_> = arr.iter().map(String::as_bytes).collect();
+            let map = complete_digit_map(map, &strings)?;
+            let key = arr.get(key_index)?;
+            if key.is_empty() || !key.bytes().all(|ch| map[ch as usize].is_ascii_digit()) {
+                return None;
+            }
+            let value = decode_integer(key.as_bytes(), &map)?;
+            if matched.is_some_and(|previous| previous != value) {
+                return None;
+            }
+            matched = Some(value);
+        }
+    }
+    if let Some(value) = recover_reordered_seed(&arrays).ok()? {
+        if matched.is_some_and(|previous| previous != value) {
+            return None;
+        }
+        matched = Some(value);
+    }
+    matched
+}
+
+// Rotated builds can move constants between tables. Validate the digit map
+// with both large mathematical anchors, then require a complete LCG table
+// containing exactly one non-standard seed in the codec's recovery range.
+// Ambiguous tables are unsupported rather than selecting an arbitrary value.
+fn recover_reordered_seed(arrays: &[Vec<String>]) -> Result<Option<u32>, ()> {
+    let strings: Vec<&[u8]> = arrays.iter().flatten().map(String::as_bytes).collect();
+    let mut matched = None;
+    for &maximum in strings.iter().filter(|s| s.len() == 17) {
+        let Some(base) = extend_digit_map([255; 256], maximum, b"4294967295.000000") else {
+            continue;
+        };
+        for &mask in strings.iter().filter(|s| s.len() == 14) {
+            let Some(map) = extend_digit_map(base, mask, b"8388607.000000") else {
+                continue;
+            };
+            if !arrays.iter().any(|array| {
+                [65_793, 4_282_663, 8_388_607].iter().all(|&value| {
+                    array
+                        .iter()
+                        .any(|s| decode_integer(s.as_bytes(), &map) == Some(value))
+                })
+            }) {
                 continue;
             }
-            let arr = parse_js_string_array(&source[bracket..=bracket + end_rel]);
-            let len44: Vec<&str> = arr
-                .iter()
-                .map(String::as_str)
-                .filter(|s| s.len() == 44)
-                .collect();
-            let len20: Vec<&str> = arr
-                .iter()
-                .map(String::as_str)
-                .filter(|s| s.len() == 20)
-                .collect();
-            if len44.is_empty() || len20.is_empty() {
-                continue;
-            }
-            for &qat in &len44 {
-                let qbytes: Vec<u8> = qat.chars().map(|c| c as u8).collect();
-                if qbytes.len() != 44 {
+            let map = complete_digit_map(map, &strings).ok_or(())?;
+            for array in arrays {
+                let values: Vec<_> = array
+                    .iter()
+                    .filter_map(|s| decode_integer(s.as_bytes(), &map))
+                    .collect();
+                // The build seed can live in the separate initializer table.
+                // Exclude ordinary string tables before collecting candidates.
+                if array.len() < 12 || values.len() * 2 <= array.len() {
                     continue;
                 }
-                for &s20 in &len20 {
-                    let s20_bytes: Vec<u8> = s20.chars().map(|c| c as u8).collect();
-                    if s20_bytes.len() != 20 {
+                for value in values.into_iter().filter(|value| {
+                    (65_536..(1 << 25)).contains(value) && !fixed_numeric_constant(*value)
+                }) {
+                    if matched.is_some_and(|previous| previous != value) {
+                        return Err(());
+                    }
+                    matched = Some(value);
+                }
+            }
+        }
+    }
+    Ok(matched)
+}
+
+fn complete_digit_map(mut map: [u8; 256], strings: &[&[u8]]) -> Option<[u8; 256]> {
+    if !map.contains(&b'1') {
+        let mut one = None;
+        for value in strings {
+            if value.len() == 4
+                && value[1..].iter().all(|&ch| map[ch as usize] == b'0')
+                && map[value[0] as usize] == 255
+            {
+                if one.is_some_and(|previous| previous != value[0]) {
+                    return None;
+                }
+                one = Some(value[0]);
+            }
+        }
+        map[one? as usize] = b'1';
+    }
+    Some(map)
+}
+
+fn extend_digit_map(mut map: [u8; 256], encoded: &[u8], plain: &[u8]) -> Option<[u8; 256]> {
+    if encoded.len() != plain.len() {
+        return None;
+    }
+    for (&ch, &value) in encoded.iter().zip(plain) {
+        if (map[ch as usize] != 255 && map[ch as usize] != value)
+            || (map[ch as usize] == 255 && map.contains(&value))
+        {
+            return None;
+        }
+        map[ch as usize] = value;
+    }
+    Some(map)
+}
+
+fn decode_integer(encoded: &[u8], map: &[u8; 256]) -> Option<u32> {
+    let mut value = 0u32;
+    let mut fractional = false;
+    let mut integer_digits = 0;
+    let mut fractional_digits = 0;
+    if encoded.is_empty() {
+        return None;
+    }
+    for &ch in encoded {
+        match map[ch as usize] {
+            b'.' if !fractional && integer_digits > 0 => fractional = true,
+            b'0' if fractional => fractional_digits += 1,
+            digit @ b'0'..=b'9' if !fractional => {
+                integer_digits += 1;
+                value = value
+                    .checked_mul(10)?
+                    .checked_add(u32::from(digit - b'0'))?
+            }
+            _ => return None,
+        }
+    }
+    (integer_digits > 0 && (!fractional || fractional_digits > 0)).then_some(value)
+}
+
+fn fixed_numeric_constant(value: u32) -> bool {
+    if [65_793, 4_282_663, 8_888_888, 3_600_000, 21_600_000].contains(&value)
+        || value.is_power_of_two()
+        || (value + 1).is_power_of_two()
+        || (value - 1).is_power_of_two()
+    {
+        return true;
+    }
+    (5..=8).any(|exponent| value.abs_diff(10u32.pow(exponent)) <= 1)
+}
+
+/// Recover the version token from the served XOR tables. Supported key periods
+/// are 8..=64 bytes, with a short printable master (or the legacy 20-byte key's
+/// longer master). Derived keys can contain control bytes; master offsets wrap.
+pub fn extract_bmak_ver(source: &str) -> Option<String> {
+    let mut matched: Option<String> = None;
+    for arr in string_arrays(source) {
+        let strings: Vec<Vec<u8>> = arr
+            .iter()
+            .filter_map(|s| {
+                s.chars()
+                    .map(|ch| u8::try_from(u32::from(ch)).ok())
+                    .collect()
+            })
+            .collect();
+        for qat in strings.iter().filter(|s| s.len() == 44) {
+            for seed in strings.iter().filter(|s| (8..=64).contains(&s.len())) {
+                let key_len = seed.len();
+                for master in &strings {
+                    if std::ptr::eq(master, seed)
+                        || !((key_len == 20 && master.len() >= 20)
+                            || ((8..=64).contains(&master.len())
+                                && master.iter().all(|ch| (32..=127).contains(ch))))
+                    {
                         continue;
                     }
-                    for master in &arr {
-                        let mbytes: Vec<u8> = master.chars().map(|c| c as u8).collect();
-                        if mbytes.len() < 20 || std::ptr::eq(master.as_str(), s20) {
-                            continue;
+                    for offset in 0..master.len() {
+                        let mut key = [0u8; 64];
+                        for i in 0..key_len {
+                            key[i] = seed[i] ^ master[(offset + i) % master.len()];
                         }
-                        for d9w in 0..=mbytes.len() - 20 {
-                            let mut z5t = [0u8; 20];
-                            let mut ascii_ok = true;
-                            for k in 0..20 {
-                                let b = s20_bytes[k] ^ mbytes[d9w + k];
-                                if !(32..=126).contains(&b) {
-                                    ascii_ok = false;
-                                    break;
-                                }
-                                z5t[k] = b;
-                            }
-                            if !ascii_ok {
+                        for shift in 0..key_len {
+                            if key[(43 + shift) % key_len] != (qat[43] ^ b'=') {
                                 continue;
                             }
-                            let needed_last = qbytes[43] ^ b'=';
-                            for shift in 0..20 {
-                                if z5t[(43 + shift) % 20] != needed_last {
-                                    continue;
-                                }
-                                let mut out = [0u8; 44];
-                                out[43] = b'=';
-                                let mut valid = true;
-                                for i in 0..43 {
-                                    let ch = qbytes[i] ^ z5t[(i + shift) % 20];
-                                    if !(ch.is_ascii_alphanumeric() || ch == b'+' || ch == b'/') {
-                                        valid = false;
-                                        break;
-                                    }
-                                    out[i] = ch;
-                                }
-                                if valid {
-                                    return String::from_utf8(out.to_vec()).ok();
-                                }
+                            let mut out = [0u8; 44];
+                            out[43] = b'=';
+                            let valid = (0..43).all(|i| {
+                                out[i] = qat[i] ^ key[(i + shift) % key_len];
+                                out[i].is_ascii_alphanumeric() || matches!(out[i], b'+' | b'/')
+                            });
+                            if !valid {
+                                continue;
                             }
+                            // A 32-byte Base64 token has two zero pad bits.
+                            if !b"AEIMQUYcgkosw048".contains(&out[42]) {
+                                continue;
+                            }
+                            let token = String::from_utf8(out.to_vec()).ok()?;
+                            if matched.as_ref().is_some_and(|previous| previous != &token) {
+                                return None;
+                            }
+                            matched = Some(token);
                         }
                     }
                 }
             }
         }
     }
-    None
+    matched
 }
 
 /// Count quoted/template literals while ignoring comments. Lengths are source
@@ -399,3 +487,6 @@ mod tests {
         assert_eq!(extract_bmak_shuffle_key(snippet), Some(6_453_891));
     }
 }
+
+#[cfg(test)]
+mod bmak_tests;
