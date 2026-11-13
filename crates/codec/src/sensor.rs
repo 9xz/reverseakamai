@@ -6,10 +6,8 @@
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use native_payload::profile::DeviceProfile;
-use native_payload::template::{
-    patch_json_fields, patch_json_raw_fields, patch_json_str, url_path_segment_from_end,
-};
-use serde_json::{Value, json};
+use native_payload::template::{patch_json_str, url_path_segment_from_end};
+use serde_json::{Value, json, value::RawValue};
 
 use crate::lcg::{desubstitute, permute_join, substitute, unpermute_join};
 use crate::pixel::seed_token;
@@ -336,9 +334,10 @@ impl BuildTemplate {
             if post.header.len() >= 6 {
                 post.header[5] = ver.clone();
             }
-            post.plaintext = patch_json_str(&post.plaintext, "ver", &ver);
-            let patched_str = patch_json_fields(
-                std::mem::take(&mut post.plaintext),
+            post.plaintext =
+                patch_json_str(&post.plaintext, "ver", &ver).map_err(CodecError::Format)?;
+            post.plaintext = patch_profile_fields(
+                &post.plaintext,
                 &[
                     ("ua", &profile.user_agent),
                     ("ucs", &ucs),
@@ -358,9 +357,6 @@ impl BuildTemplate {
                     ("s071", &profile.webgl.vendor),
                     ("s073", &profile.webgl.renderer),
                 ],
-            );
-            post.plaintext = patch_json_raw_fields(
-                patched_str,
                 &[
                     ("swi", &swi),
                     ("she", &she),
@@ -373,7 +369,7 @@ impl BuildTemplate {
                     ("s035", &dm),
                     ("s037", &hc),
                 ],
-            );
+            )?;
         }
         Ok(tpl)
     }
@@ -397,9 +393,10 @@ impl BuildTemplate {
             .get(index)
             .or_else(|| self.posts.last())
             .ok_or_else(|| CodecError::Format("template has no posts".to_owned()))?;
-        let mut plaintext = patch_json_str(&post.plaintext, "pur", page_url);
+        let mut plaintext =
+            patch_json_str(&post.plaintext, "pur", page_url).map_err(CodecError::Format)?;
         if let Some(ffl) = url_path_segment_from_end(script_url, 4) {
-            plaintext = patch_json_str(&plaintext, "ffl", ffl);
+            plaintext = patch_json_str(&plaintext, "ffl", ffl).map_err(CodecError::Format)?;
         }
         let sep = if self.version >= 3 { ':' } else { ',' };
         let ciphertext = encode_body(&plaintext, sep, sub_key, self.shuffle_key);
@@ -478,6 +475,88 @@ impl BuildTemplate {
             posts,
         })
     }
+}
+
+// Profile fields in the bundled schema live in din/dsi/sww as well as the root.
+// native-payload's fallible JSON helpers intentionally patch top-level fields
+// only. Borrow raw value spans to preserve every byte outside the replaced
+// tokens, including key order and number formatting, without changing the
+// workspace's serde_json serialization behavior.
+fn patch_profile_fields(
+    plaintext: &str,
+    strings: &[(&str, &str)],
+    raw: &[(&str, &str)],
+) -> Result<String> {
+    let mut fields: Vec<(&str, Value)> = strings
+        .iter()
+        .map(|&(key, value)| (key, Value::String(value.to_owned())))
+        .collect();
+    for &(key, value) in raw {
+        fields.push((
+            key,
+            serde_json::from_str(value).map_err(|e| CodecError::Format(e.to_string()))?,
+        ));
+    }
+    fn collect(
+        plaintext: &str,
+        node: &RawValue,
+        fields: &[(&str, Value)],
+        edits: &mut Vec<(usize, usize, String)>,
+    ) -> Result<()> {
+        match node.get().as_bytes()[0] {
+            b'{' => {
+                let object: std::collections::BTreeMap<String, &RawValue> =
+                    serde_json::from_str(node.get())
+                        .map_err(|e| CodecError::Format(e.to_string()))?;
+                for (key, value) in object {
+                    if let Some((_, replacement)) = fields.iter().find(|(name, _)| *name == key) {
+                        let current: Value = serde_json::from_str(value.get())
+                            .map_err(|e| CodecError::Format(e.to_string()))?;
+                        if current.is_string() != replacement.is_string()
+                            || current.is_number() != replacement.is_number()
+                        {
+                            return Err(CodecError::Format(format!(
+                                "unexpected profile field type: {key}"
+                            )));
+                        }
+                        // Deserializing &RawValue borrows a slice of plaintext.
+                        let start = value.get().as_ptr() as usize - plaintext.as_ptr() as usize;
+                        edits.push((
+                            start,
+                            start + value.get().len(),
+                            serde_json::to_string(replacement)
+                                .map_err(|e| CodecError::Format(e.to_string()))?,
+                        ));
+                    } else {
+                        collect(plaintext, value, fields, edits)?;
+                    }
+                }
+            }
+            b'[' => {
+                let array: Vec<&RawValue> = serde_json::from_str(node.get())
+                    .map_err(|e| CodecError::Format(e.to_string()))?;
+                for value in array {
+                    collect(plaintext, value, fields, edits)?;
+                }
+            }
+            _ => {}
+        }
+        Ok(())
+    }
+    let value: &RawValue =
+        serde_json::from_str(plaintext).map_err(|e| CodecError::Format(e.to_string()))?;
+    let mut edits = Vec::new();
+    collect(plaintext, value, &fields, &mut edits)?;
+    edits.sort_unstable_by_key(|(start, _, _)| *start);
+    let mut out = String::with_capacity(plaintext.len());
+    let mut cursor = 0;
+    for (start, end, replacement) in edits {
+        out.push_str(&plaintext[cursor..start]);
+        out.push_str(&replacement);
+        cursor = end;
+    }
+    out.push_str(&plaintext[cursor..]);
+    Ok(out)
 }
 
 /// Construct a native SBSD `{"body":"..."}` JSON payload from [`DeviceProfile`]
@@ -559,6 +638,72 @@ mod tests {
     #[test]
     fn v2_checksum_matches_formula() {
         assert_eq!(checksum_v2("ABC"), (65 + 66 + 67) ^ 24);
+    }
+
+    #[test]
+    fn bundled_profile_template_keeps_serialization_and_nested_fields() {
+        let template: Value = serde_json::from_str(DEFAULT_V3_TEMPLATE_JSON).unwrap();
+        let template = BuildTemplate::from_json(&template).unwrap();
+        for post in template.posts {
+            assert_eq!(
+                patch_profile_fields(&post.plaintext, &[], &[]).unwrap(),
+                post.plaintext
+            );
+        }
+        let plain = r#"{"ver":"tok","din":[{"ua":"old"},{"she":100}],"dsi":[{"wev":"old"}],"sww":{"s029":"old","s035":4},"keep":"\"ua\":\"old\""}"#;
+        let patched = patch_profile_fields(
+            plain,
+            &[("ua", "new"), ("wev", "vendor"), ("s029", "")],
+            &[("she", "200"), ("s035", "8")],
+        )
+        .unwrap();
+        assert_eq!(
+            patched,
+            r#"{"ver":"tok","din":[{"ua":"new"},{"she":200}],"dsi":[{"wev":"vendor"}],"sww":{"s029":"","s035":8},"keep":"\"ua\":\"old\""}"#
+        );
+        assert!(patch_profile_fields(plain, &[("she", "string")], &[]).is_err());
+        let formatted = r#" { "n":1.2300, "before":"é🙂", "din":[{"\u0075a":"old"}] } "#;
+        assert_eq!(
+            patch_profile_fields(formatted, &[("ua", "新")], &[]).unwrap(),
+            r#" { "n":1.2300, "before":"é🙂", "din":[{"\u0075a":"新"}] } "#
+        );
+    }
+
+    #[test]
+    fn captured_template_patching_preserves_formatting_and_propagates_errors() {
+        let plain = " { \"ver\":\"tok\", \"pur\" :\"old\", \"ffl\":\"old\", \"n\":1.2300 } ";
+        let mut template = BuildTemplate {
+            script_sha256: "synthetic".to_owned(),
+            version: 3,
+            shuffle_key: 65_914,
+            posts: vec![PostTemplate {
+                header: vec!["3", "0", "1", "0", "0", "tok", "0,0,0,0,0,0"]
+                    .into_iter()
+                    .map(str::to_owned)
+                    .collect(),
+                plaintext: plain.to_owned(),
+            }],
+        };
+        let encoded = template
+            .encode_post_for_script(0, 4_538_946, "", "https://e.test/a/b/c/d/e.js")
+            .unwrap();
+        let body: Value = serde_json::from_str(&encoded).unwrap();
+        let envelope = Envelope::parse(body["sensor_data"].as_str().unwrap(), 0).unwrap();
+        assert_eq!(
+            decode_body(&envelope.ciphertext, ':', 4_538_946, Some(65_914)),
+            " { \"ver\":\"tok\", \"pur\" :\"\", \"ffl\":\"b\", \"n\":1.2300 } "
+        );
+        for invalid in [
+            r#"{"nested":{"pur":"old"}}"#,
+            r#"{"pur":1}"#,
+            r#"{"pur":"a","pur":"b"}"#,
+        ] {
+            template.posts[0].plaintext = invalid.to_owned();
+            assert!(matches!(
+                template.encode_post(0, 1, "new"),
+                Err(CodecError::Format(_))
+            ));
+        }
     }
 
     #[test]
